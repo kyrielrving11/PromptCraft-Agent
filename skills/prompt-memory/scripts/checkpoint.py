@@ -13,6 +13,12 @@ Usage:
 
   # From file
   python checkpoint.py --input entry.json
+
+  # Save to global vault (cross-project)
+  echo '{"task_id":"global-constraints","user_intent":"..."}' | python checkpoint.py --global
+
+The global vault (~/.promptcraft/global_vault.json) stores cross-project
+GLOBAL constraints. Use --global to write there instead of the project vault.
 """
 
 import argparse
@@ -30,6 +36,8 @@ _OPTIONAL_KEYS = {
 
 DEFAULT_VAULT = Path(".promptcraft/prompt_vault.json")
 DEFAULT_PROMPTS_DIR = Path(".promptcraft/prompts")
+GLOBAL_VAULT = Path.home() / ".promptcraft" / "global_vault.json"
+GLOBAL_PROMPTS_DIR = Path.home() / ".promptcraft" / "prompts"
 MAX_PREVIEW_CHARS = 200
 
 
@@ -170,10 +178,20 @@ def _build_entry(payload: dict, vault: dict, prompts_dir: Path, version_of: str 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Save a prompt checkpoint to the vault.")
     parser.add_argument("--input", type=Path, help="JSON file with entry payload.")
+    parser.add_argument("--global", dest="global_vault", action="store_true",
+                        help=f"Save to the global vault ({GLOBAL_VAULT}) instead of the project vault.")
     parser.add_argument("--vault", type=Path, default=DEFAULT_VAULT, help="Path to prompt_vault.json.")
     parser.add_argument("--prompts-dir", type=Path, default=DEFAULT_PROMPTS_DIR, help="Directory for .md prompt files.")
     parser.add_argument("--version-of", help="task_id to create a new version for.")
     args = parser.parse_args()
+
+    # ── Route to global vault when --global is set ──
+    if args.global_vault:
+        # Only override if the user didn't explicitly set them
+        if args.vault == DEFAULT_VAULT:
+            args.vault = GLOBAL_VAULT
+        if args.prompts_dir == DEFAULT_PROMPTS_DIR:
+            args.prompts_dir = GLOBAL_PROMPTS_DIR
 
     if args.input:
         with args.input.open("r", encoding="utf-8-sig") as f:
@@ -206,6 +224,7 @@ def main() -> None:
     }
     if entry.get("md_path"):
         result["md_path"] = entry["md_path"]
+    result["vault"] = str(args.vault)
     print(json.dumps(result, ensure_ascii=False))
 
 

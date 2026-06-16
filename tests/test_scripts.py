@@ -295,5 +295,103 @@ class TestHydrate(unittest.TestCase):
         self.assertEqual(compact["generated_prompt"], "# Full prompt here")
 
 
+class TestFederation(unittest.TestCase):
+    """Tests for multi-project federation (global vault merge)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_merge_global_entries_no_global(self):
+        """Without global vault, entries are unchanged and tagged project."""
+        project = [
+            {"id": "p1", "task_id": "t1", "is_active": True},
+            {"id": "p2", "task_id": "t2", "is_active": False},
+        ]
+        merged = hydrate._merge_global_entries(project, None)
+        self.assertEqual(len(merged), 2)
+        self.assertTrue(all(e["source"] == "project" for e in merged))
+
+    def test_merge_global_entries_new_task(self):
+        """Global entry with new task_id is merged in."""
+        project = [
+            {"id": "p1", "task_id": "t1", "is_active": True},
+        ]
+        global_vault = {
+            "entries": [
+                {"id": "g1", "task_id": "t2", "is_active": True, "user_intent": "global"},
+            ]
+        }
+        merged = hydrate._merge_global_entries(project, global_vault)
+        self.assertEqual(len(merged), 2)
+        sources = {e["id"]: e["source"] for e in merged}
+        self.assertEqual(sources["p1"], "project")
+        self.assertEqual(sources["g1"], "global")
+
+    def test_merge_global_entries_dedup(self):
+        """Global entry is skipped when project already has active entry for task_id."""
+        project = [
+            {"id": "p1", "task_id": "shared-task", "is_active": True},
+        ]
+        global_vault = {
+            "entries": [
+                {"id": "g1", "task_id": "shared-task", "is_active": True},
+                {"id": "g2", "task_id": "other-task", "is_active": True},
+            ]
+        }
+        merged = hydrate._merge_global_entries(project, global_vault)
+        self.assertEqual(len(merged), 2)  # p1 + g2 (g1 deduped)
+        ids = {e["id"] for e in merged}
+        self.assertIn("p1", ids)
+        self.assertIn("g2", ids)
+        self.assertNotIn("g1", ids)
+
+    def test_merge_global_entries_inactive_skipped(self):
+        """Inactive global entries are not merged."""
+        project = [{"id": "p1", "task_id": "t1", "is_active": True}]
+        global_vault = {
+            "entries": [
+                {"id": "g1", "task_id": "t2", "is_active": False},
+            ]
+        }
+        merged = hydrate._merge_global_entries(project, global_vault)
+        self.assertEqual(len(merged), 1)
+
+    def test_checkpoint_global_flag(self):
+        """checkpoint.py --global writes to ~/.promptcraft/global_vault.json."""
+        home_global = Path.home() / ".promptcraft" / "global_vault.json"
+        # Ensure clean state
+        if home_global.exists():
+            home_global.unlink()
+
+        try:
+            import subprocess
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS_DIR / "checkpoint.py"),
+                    "--global",
+                ],
+                input='{"task_id":"fed-test","user_intent":"test federation"}',
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertTrue(home_global.exists())
+            data = json.loads(home_global.read_text(encoding="utf-8"))
+            self.assertEqual(len(data["entries"]), 1)
+            self.assertEqual(data["entries"][0]["task_id"], "fed-test")
+        finally:
+            if home_global.exists():
+                home_global.unlink()
+            prompts_dir = Path.home() / ".promptcraft" / "prompts"
+            import shutil
+            if prompts_dir.exists():
+                shutil.rmtree(prompts_dir)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

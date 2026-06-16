@@ -34,7 +34,10 @@ If your skills are installed at a different location, adjust accordingly:
 
 ## Step 0: Boot Check — Load History
 
-If `.promptcraft/prompt_vault.json` exists, first expand the query, then execute hydrate.py.
+If `.promptcraft/prompt_vault.json` exists (or `~/.promptcraft/global_vault.json`),
+first expand the query, then execute hydrate.py. hydrate.py **automatically merges**
+both the global vault and the project vault — no extra flags needed. GLOBAL entries
+from either vault will appear in `global_entries`.
 
 ### Step 0a: Query Expansion (Internal Reasoning)
 
@@ -269,8 +272,17 @@ The vault uses a **dual-storage** architecture:
 Execute checkpoint.py to persist. Write the payload to a temp JSON file (method 2, recommended for prompts with special characters), then:
 
 ```bash
+# Default: save to project vault
 python .codebuddy/skills/prompt-memory/scripts/checkpoint.py --input /path/to/temp_entry.json
+
+# For GLOBAL-level entries: save to global vault (~/.promptcraft/global_vault.json)
+python .codebuddy/skills/prompt-memory/scripts/checkpoint.py --input /path/to/temp_entry.json --global
 ```
+
+**When to use `--global`**: If the entry's `summary.importance` is `"GLOBAL"` and
+the constraints/decisions apply across all projects (e.g. org-wide coding standards,
+mandatory security tools), save to the global vault. Project-specific entries stay
+in the project vault.
 
 ### Step 4.0: Generate LLM Summary (before checkpoint)
 

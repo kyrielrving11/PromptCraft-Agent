@@ -153,3 +153,52 @@ Entries marked `summary.importance: "GLOBAL"` are treated specially by `hydrate.
 This ensures long-term cross-task constraints (e.g. "all contracts must pass Slither",
 "zero external dependencies") are injected into every session's context, regardless of
 how the user phrases their current query.
+
+## Federation: Global Vault
+
+PromptCraft supports a two-tier vault architecture for cross-project constraints.
+
+### Paths
+
+| Tier | Vault Path | Prompts Dir |
+|------|-----------|-------------|
+| Global | `~/.promptcraft/global_vault.json` | `~/.promptcraft/prompts/` |
+| Project | `.promptcraft/prompt_vault.json` | `.promptcraft/prompts/` |
+
+### How It Works
+
+**hydrate.py** automatically merges both vaults on every query:
+
+1. Read project vault (`.promptcraft/prompt_vault.json`)
+2. If `~/.promptcraft/global_vault.json` exists, read it too
+3. Merge entries: project vault entries take precedence. If the same `task_id`
+   has an active entry in both vaults, the global entry is skipped.
+4. All entries are scored and ranked together
+5. GLOBAL entries from BOTH vaults appear in `global_entries`
+6. Each result carries `"source": "global"` or `"source": "project"`
+
+Use `--no-global` to skip the global vault and search only the project vault.
+
+**checkpoint.py** saves to the project vault by default. Use `--global` to
+save to the global vault instead:
+
+```bash
+echo '{"task_id":"global-coding-standards","user_intent":"..."}' | \
+  python checkpoint.py --global
+```
+
+### When to Use Each Tier
+
+| Save to | Use case |
+|---------|----------|
+| Global vault | Cross-project constraints ("all SQL must have rollback scripts"), org-wide coding standards, shared prompt templates |
+| Project vault | Project-specific decisions, bug-specific prompts, one-off tasks |
+
+### Source Field
+
+Each entry in hydrate.py results carries a `source` field:
+- `"global"` — entry originated from `~/.promptcraft/global_vault.json`
+- `"project"` — entry originated from `.promptcraft/prompt_vault.json`
+
+This lets the caller know where a constraint came from when debugging
+conflicting GLOBAL entries.

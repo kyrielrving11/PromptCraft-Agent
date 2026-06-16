@@ -23,6 +23,12 @@ Usage:
 
   # List version history for a task
   python hydrate.py --list-versions --task-id "smart-contract-audit"
+
+  # Skip global vault (project-only search)
+  python hydrate.py --query "..." --no-global
+
+The global vault (~/.promptcraft/global_vault.json) is automatically merged
+with the project vault during search. Use --no-global to disable this.
 """
 
 import argparse
@@ -33,6 +39,8 @@ from pathlib import Path
 
 DEFAULT_VAULT = Path(".promptcraft/prompt_vault.json")
 DEFAULT_PROMPTS_DIR = Path(".promptcraft/prompts")
+GLOBAL_VAULT = Path.home() / ".promptcraft" / "global_vault.json"
+GLOBAL_PROMPTS_DIR = Path.home() / ".promptcraft" / "prompts"
 
 # Weight multipliers for scoring fields
 _WEIGHTS = {
@@ -213,6 +221,42 @@ def _is_global(entry: dict) -> bool:
     return isinstance(summary, dict) and summary.get("importance") == "GLOBAL"
 
 
+def _merge_global_entries(project_entries: list[dict], global_vault: dict | None) -> list[dict]:
+    """Merge global vault entries into the working set.
+
+    Rules:
+    - Only active entries from the global vault are merged.
+    - If a task_id already has an active entry in the project vault, the global
+      entry is skipped (project overrides global).
+    - Merged entries are tagged with source="global"; project entries get
+      source="project".
+    - The global entries are NOT written into the project vault dict — they only
+      live in the returned list for this query.
+    """
+    merged = list(project_entries)
+    if global_vault is None:
+        for e in merged:
+            e.setdefault("source", "project")
+        return merged
+
+    project_active_tids = {e.get("task_id") for e in project_entries if e.get("is_active")}
+
+    for e in global_vault.get("entries", []):
+        if not e.get("is_active", False):
+            continue
+        tid = e.get("task_id")
+        if tid and tid in project_active_tids:
+            continue  # project vault already has an active version for this task
+        e_copy = dict(e)
+        e_copy["source"] = "global"
+        merged.append(e_copy)
+
+    for e in merged:
+        e.setdefault("source", "project")
+
+    return merged
+
+
 def cmd_query(args, vault: dict) -> None:
     query = str(args.query or "").strip()
     if not query:
@@ -220,7 +264,14 @@ def cmd_query(args, vault: dict) -> None:
         sys.exit(1)
 
     query_tokens = _tokenize(query)
-    all_entries = vault.get("entries", [])
+
+    # ── Merge global vault (unless --no-global) ──
+    use_global = not getattr(args, "no_global", False)
+    global_vault = None
+    if use_global:
+        global_vault = _read_vault(GLOBAL_VAULT) if GLOBAL_VAULT.exists() else None
+
+    all_entries = _merge_global_entries(vault.get("entries", []), global_vault)
     entries = list(all_entries)
 
     # Filter if specified (filters apply to regular results, not GLOBAL)
@@ -264,6 +315,7 @@ def cmd_query(args, vault: dict) -> None:
             compact = _compact_entry(e, include_prompt=include_prompt)
             compact["auto_full"] = include_prompt and not always_full
             compact["global"] = True
+            compact["source"] = e.get("source", "project")
             global_entries.append(compact)
 
     # ── Regular results: top-k scored entries, excluding those already in GLOBAL ──
@@ -276,6 +328,7 @@ def cmd_query(args, vault: dict) -> None:
         compact = _compact_entry(e, include_prompt=include_prompt)
         compact["auto_full"] = include_prompt and not always_full
         compact["global"] = False
+        compact["source"] = e.get("source", "project")
         results.append(compact)
 
     output: dict[str, object] = {
@@ -356,6 +409,7 @@ def main() -> None:
     parser.add_argument("--full", action="store_true", help="Always read complete prompt from linked .md files.")
     parser.add_argument("--auto-full-threshold", type=float, default=DEFAULT_AUTO_FULL_THRESHOLD,
                         help=f"Score threshold above which full prompt is auto-injected (default: {DEFAULT_AUTO_FULL_THRESHOLD}).")
+    parser.add_argument("--no-global", action="store_true", help="Skip the global vault (~/.promptcraft/global_vault.json) — only search the project vault.")
     parser.add_argument("--rollback-to", help="Version tag to rollback to (requires --task-id).")
     parser.add_argument("--list-versions", action="store_true", help="List all versions for a task.")
     parser.add_argument("--vault", type=Path, default=DEFAULT_VAULT, help="Path to prompt_vault.json.")

@@ -82,6 +82,34 @@ Also supports:
 - `--list-versions` to inspect a task's full version chain.
 - `--full` to include `generated_prompt` (complete text) in search results.
 
+## Federation: Global Vault
+
+PromptCraft supports a two-tier vault architecture. The **global vault**
+(`~/.promptcraft/global_vault.json`) stores cross-project constraints and
+shared prompt templates. The **project vault** (`.promptcraft/prompt_vault.json`)
+stores project-specific history.
+
+Hydrate.py automatically merges both vaults on every query — no extra flags
+needed. Project entries take precedence when the same `task_id` exists in
+both vaults.
+
+### checkpoint.py `--global` flag
+
+Save to the global vault instead of the project vault:
+
+```bash
+echo '{"task_id":"org-coding-standards","user_intent":"All Go code must use Gin + GORM"}' | \
+  python checkpoint.py --global
+```
+
+### hydrate.py `--no-global` flag
+
+Skip the global vault and search only the project vault:
+
+```bash
+python hydrate.py --query "audit contract" --no-global
+```
+
 ## When to Use This Skill
 
 Load `prompt-memory` alongside `prompt-craft` or `prompt-review`. The scripts are
@@ -89,4 +117,5 @@ deterministic — execute them directly rather than loading them into the AI's c
 
 ## Reference
 
-- `references/vault-schema.md` — Full vault JSON structure with field descriptions.
+- `references/vault-schema.md` — Full vault JSON structure with field descriptions
+  including federation architecture and merge rules.
