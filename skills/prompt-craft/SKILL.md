@@ -34,13 +34,45 @@ If your skills are installed at a different location, adjust accordingly:
 
 ## Step 0: Boot Check — Load History
 
-If `.promptcraft/prompt_vault.json` exists, execute:
+If `.promptcraft/prompt_vault.json` exists, first expand the query, then execute hydrate.py.
 
-```bash
-python .codebuddy/skills/prompt-memory/scripts/hydrate.py --query "<user's current task description>" --top-k 3
+### Step 0a: Query Expansion (Internal Reasoning)
+
+**Before** calling hydrate.py, expand the user's task description to improve
+Jaccard overlap with vault entries. The vault may contain entries in Chinese,
+English, or mixed — a single-language query will miss cross-language matches.
+
+Perform this expansion internally (do NOT output to the user):
+
+1. **Extract 3-5 core technical concepts** from the user's task (tech stack,
+   domain terms, operation verbs, architectural patterns).
+2. **Generate 1-2 synonyms / equivalent terms per concept** in the OPPOSITE
+   language:
+   - If the user's task is in Chinese → generate English equivalents
+   - If the user's task is in English → generate Chinese equivalents
+   - If mixed, generate both directions
+3. **Keep total keywords to 5-10** — too many = noise; too few = no benefit.
+4. **Concatenate**: `"<original task description> <keyword1> <keyword2> ..."`
+
+Example:
+```
+User task: "审计 ERC-20 合约的权限控制逻辑"
+Expanded:  "审计 ERC-20 合约的权限控制逻辑 access control authorization
+           ownership mint burn permission check ownable 智能合约安全"
 ```
 
-The response contains two groups:
+Then call hydrate.py with the expanded query:
+
+```bash
+python .codebuddy/skills/prompt-memory/scripts/hydrate.py --query "<expanded query>" --top-k 3
+```
+
+**Why this works**: Jaccard similarity operates on token sets. Adding
+cross-language synonyms and related terms creates overlapping tokens where
+there would otherwise be none. A vault entry about "access control" now
+matches a query about "权限控制" because both tokens appear in the query.
+
+### Step 0b: Parse hydrate.py Response
 
 ### `global_entries` — Always Inject (Unconditional)
 
@@ -346,7 +378,8 @@ CRITICAL: Step 4 runs BEFORE Step 5. Whether the user selects "Execute", "Save",
 After saving, present three options to the user:
 
 1. **"Execute this prompt now"** — Immediately use the enhanced prompt in the current
-   session to complete the user's task. No copy-paste, no new session needed.
+   session to complete the user's task. After execution, automatically analyze the
+   output and write structured feedback back to the vault (Steps 5a→5b→5c below).
 
 2. **"Save and use later"** — The complete prompt (not just a summary) has been saved
    to the vault (Step 4). It can be loaded in a future session with:
@@ -355,6 +388,87 @@ After saving, present three options to the user:
 3. **"Review and improve"** — Load the `prompt-review` skill to check completeness,
    identify missing constraints, and suggest improvements. Improved versions are
    automatically appended as new versions to the vault.
+
+---
+
+### Step 5a: Execute the Prompt
+
+When the user selects option 1, execute the enhanced prompt in the current session.
+Use the prompt exactly as constructed — do not modify it during execution.
+
+### Step 5b: Analyze Execution Output
+
+After execution completes, analyze the output against the prompt's **Hard Constraints**
+(section 7) and **Generation Requirements** (section 8). Generate a structured
+execution feedback JSON:
+
+```json
+{
+  "status": "success|partial|failed",
+  "quality_score": 1-5,
+  "constraint_compliance": {
+    "all_hard_constraints_met": true,
+    "violations": []
+  },
+  "output_summary": "One sentence describing what was actually produced.",
+  "issues_found": [],
+  "what_worked_well": [],
+  "improvement_notes": "Specific suggestions if the prompt should be adjusted for next time."
+}
+```
+
+**Quality score guide:**
+| Score | Meaning |
+|-------|---------|
+| 5 | All constraints met, output exceeds expectations, zero manual fixes needed |
+| 4 | All hard constraints met, minor style/format adjustments needed |
+| 3 | All hard constraints met but output required moderate rework |
+| 2 | One or more hard constraints violated, significant rework needed |
+| 1 | Core task not achieved, prompt needs fundamental redesign |
+
+**Analysis rules:**
+- Check each hard constraint individually — do not assume "all good" without verifying.
+- If the output is code, check for syntax errors, missing imports, broken references.
+- If the output is analysis, check for logical gaps, unsupported claims, missing evidence.
+- Be honest — inflated scores poison future retrieval. A score of 2 with clear notes
+  is more valuable than a dishonest 4.
+
+### Step 5c: Write Feedback to Vault
+
+Run checkpoint.py with `--version-of <task_id>` to append the feedback as a new
+version. The payload MUST include the original fields plus the feedback:
+
+```bash
+echo '{
+  "task_id": "<task_id>",
+  "user_intent": "<original user intent>",
+  "skill_used": "<original technique>",
+  "execution_feedback": "<structured feedback JSON from Step 5b as a string>",
+  "summary": {
+    "goal": "<original goal>",
+    "technique": "<original technique>",
+    "importance": "REFERENCE",
+    "what_was_done": ["Executed prompt and analyzed output. Score: <N>/5."],
+    "key_decisions": [],
+    "hard_constraints_added": [],
+    "rejected_directions": [],
+    "important_outputs": [],
+    "open_questions": [],
+    "summary_text": "Execution feedback: <status>. <output_summary> Issues: <count>. Quality: <N>/5."
+  }
+}' | python .codebuddy/skills/prompt-memory/scripts/checkpoint.py --version-of <task_id>
+```
+
+**Key rules for feedback write-back:**
+- Use `importance: "REFERENCE"` — feedback should be consultable but NOT auto-injected
+  into future sessions (unlike GLOBAL constraints).
+- Always use `--version-of` to append, never overwrite the original prompt entry.
+- Keep `summary.summary_text` concise (<200 chars) — it will be read by hydrate.py
+  during future context injection.
+- Report the new `version_tag` to the user (e.g. "Feedback saved as v2").
+
+**If the user declines feedback write-back:** Respect their choice. The prompt is
+already saved from Step 4 — feedback is an enhancement, not a requirement.
 
 ---
 
@@ -370,3 +484,9 @@ After saving, present three options to the user:
   field definitions, reference ranges, or input→output examples). Guessing domain values
   without domain context produces wrong cases that pollute the vault and mislead future
   retrieval. Instead, skip Step 2.5 and let the user fill Section 5 in Step 3.
+- Do NOT skip query expansion (Step 0a) when a vault exists — a single-language query
+  will miss cross-language matches and GLOBAL entries may fail to surface relevant context.
+- Do NOT inflate execution feedback scores — honest low scores with clear notes are more
+  valuable for future retrieval than dishonest high scores.
+- Do NOT write execution feedback as `importance: GLOBAL` — use `REFERENCE` so feedback
+  doesn't pollute future session context.

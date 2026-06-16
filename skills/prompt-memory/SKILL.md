@@ -26,6 +26,8 @@ without overwriting previous versions. Manages `version_tag`, `is_active`, and
 When to call:
 - After Step 4 of prompt-craft's workflow (new or versioned save).
 - After prompt-review produces an improved version.
+- After prompt-craft's Step 5c (execution feedback write-back) — append feedback as a
+  new version using `--version-of`, with `importance: "REFERENCE"`.
 
 ### `scripts/hydrate.py` — Load and filter prompt history
 
@@ -33,6 +35,24 @@ Executed at the start of a new prompt-craft session. Performs keyword-overlap se
 search against the vault and returns only `is_active` versions of matching tasks.
 By default returns compact results (metadata only, ~500 tokens). Use `--full` to
 include the complete generated prompt text for reuse.
+
+**Query Expansion (best practice):**
+
+hydrate.py uses Jaccard similarity — it matches exact tokens only. "审计权限" and
+"access control" have zero overlap despite being semantically identical. Before
+calling hydrate.py, expand the query with cross-language synonyms and related
+technical terms:
+
+```
+# Poor (single-language, narrow):
+hydrate.py --query "审计 ERC-20 合约的权限控制逻辑"
+
+# Good (expanded with cross-language synonyms):
+hydrate.py --query "审计 ERC-20 合约的权限控制逻辑 access control authorization ownership mint burn permission check ownable"
+```
+
+The expanded query creates token overlap with vault entries in either language,
+dramatically improving recall without changing the scoring algorithm.
 
 **Query response structure:**
 

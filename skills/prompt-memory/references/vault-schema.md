@@ -29,7 +29,7 @@ prompt checkpoints. Each entry represents one version of a prompt for a given ta
 | `generated_prompt` | string | no | **(Logical field — not stored inline in JSON)**. The complete prompt text lives in the `.md` file pointed to by `md_path`. Retrieve it via `hydrate.py --full` or when score exceeds the auto-full threshold. |
 | `md_path` | string | no | Relative path to the `.md` file containing the complete prompt (e.g. `prompts/smart-contract-audit/v1.md`). Set by checkpoint.py when `generated_prompt` is provided. |
 | `generated_prompt_preview` | string (≤200 chars) | auto | Truncated preview of the full prompt (first 200 chars). Stored inline in JSON for quick identification without reading the `.md` file. |
-| `execution_feedback` | string | no | User feedback on how well the prompt performed (e.g. "F1=94%"). |
+| `execution_feedback` | string | no | **Structured feedback** on how well the prompt performed at execution time. Stored as a JSON string with the following sub-fields: `status` (success\|partial\|failed), `quality_score` (1-5), `constraint_compliance` (object with `all_hard_constraints_met` and `violations`), `output_summary` (one sentence), `issues_found` (array), `what_worked_well` (array), `improvement_notes` (string). See Execution Feedback Schema below. |
 | `tags` | array of strings | no | Freeform tags for categorization and semantic search. |
 | `summary` | object | no | LLM-generated structured summary. Stores conclusions without exposing raw prompt text. See Summary Schema below. |
 
@@ -60,6 +60,38 @@ When present, `summary` is a nested JSON object with the following fields:
 7. `open_questions` records issues still needing resolution from the user or future sessions.
 8. If no key decisions were made, use an empty array `[]` for `key_decisions`.
 9. **Never expose raw prompt text** in any summary field — the summary is for retrieval only; the full prompt exists in the `.md` file.
+
+### Execution Feedback Sub-Schema
+
+When present, `execution_feedback` contains a JSON string with the following structure:
+
+```json
+{
+  "status": "success|partial|failed",
+  "quality_score": 1-5,
+  "constraint_compliance": {
+    "all_hard_constraints_met": true,
+    "violations": ["constraint description if any"]
+  },
+  "output_summary": "One sentence describing what was actually produced.",
+  "issues_found": ["issue 1", "issue 2"],
+  "what_worked_well": ["strength 1"],
+  "improvement_notes": "Specific suggestions for prompt improvement."
+}
+```
+
+**Quality score scale:**
+| Score | Meaning |
+|-------|---------|
+| 5 | All constraints met, exceeds expectations, zero manual fixes |
+| 4 | All hard constraints met, minor style/format adjustments |
+| 3 | All hard constraints met but moderate rework needed |
+| 2 | One or more hard constraints violated, significant rework |
+| 1 | Core task not achieved, prompt needs fundamental redesign |
+
+Feedback entries should use `importance: "REFERENCE"` in their summary — they are
+consultable but not auto-injected into future session context. Feedback is always
+appended via `--version-of`, never overwriting the original prompt entry.
 
 ## Version Lifecycle
 
